@@ -277,20 +277,20 @@ class Companion:
 
     def _show_menu(self, event) -> None:
         menu = Gtk.Menu()
-        self._menu_item(menu, "🐟  Nourrir Tux",  self.feed)
-        self._menu_item(menu, "Réveiller",          self.wake)
-        self._menu_item(menu, "Jouer",              self.play)
+        self._menu_item(menu, "🐟  Feed Tux",  self.feed)
+        self._menu_item(menu, "Wake up",          self.wake)
+        self._menu_item(menu, "Play",              self.play)
 
-        p_item = Gtk.MenuItem(label="Personnalité")
+        p_item = Gtk.MenuItem(label="Personality")
         p_sub  = Gtk.Menu()
         for name in PERSONALITIES:
             self._menu_item(p_sub, name, lambda _=None, n=name: self.set_personality(n))
         p_item.set_submenu(p_sub)
         menu.append(p_item)
 
-        self._menu_item(menu, "Réglages…",  self._open_settings)
+        self._menu_item(menu, "Settings…",  self._open_settings)
         menu.append(Gtk.SeparatorMenuItem())
-        self._menu_item(menu, "Quitter",    Gtk.main_quit)
+        self._menu_item(menu, "Quit",    Gtk.main_quit)
 
         menu.show_all()
         menu.popup_at_pointer(event)
@@ -304,7 +304,7 @@ class Companion:
     # ── settings dialog ─────────────────────────────────────────────────── #
 
     def _open_settings(self) -> None:
-        dlg = Gtk.Dialog(title="Compa — Réglages", parent=None, flags=0)
+        dlg = Gtk.Dialog(title="Compa — Settings", parent=None, flags=0)
         dlg.set_keep_above(True)
         dlg.set_resizable(False)
         box = dlg.get_content_area()
@@ -320,12 +320,12 @@ class Companion:
             )
             return adj
 
-        a_size  = _slider("Taille (%)",  60, 150, int(self.size  * 100))
-        a_speed = _slider("Vitesse (%)", 50, 160, int(self.speed * 100))
-        a_op    = _slider("Opacité (%)", 40, 100, int(self.opacity * 100))
+        a_size  = _slider("Size (%)",  60, 150, int(self.size  * 100))
+        a_speed = _slider("Speed (%)", 50, 160, int(self.speed * 100))
+        a_op    = _slider("Opacity (%)", 40, 100, int(self.opacity * 100))
 
-        # Personnalité
-        box.pack_start(Gtk.Label(label="Personnalité", xalign=0), False, False, 0)
+        # Personality
+        box.pack_start(Gtk.Label(label="Personality", xalign=0), False, False, 0)
         combo_p = Gtk.ComboBoxText()
         active_idx = 0
         p_names = list(PERSONALITIES.keys())
@@ -337,19 +337,19 @@ class Companion:
         box.pack_start(combo_p, False, False, 0)
 
         # Switches / CheckButtons
-        chk_topmost = Gtk.CheckButton(label="Toujours au premier plan")
+        chk_topmost = Gtk.CheckButton(label="Always on top")
         chk_topmost.set_active(self.keep_above)
         box.pack_start(chk_topmost, False, False, 0)
 
-        chk_anim = Gtk.CheckButton(label="Animations actives (autonomes)")
+        chk_anim = Gtk.CheckButton(label="Animations enabled")
         chk_anim.set_active(self.animations_enabled)
         box.pack_start(chk_anim, False, False, 0)
 
-        chk_autostart = Gtk.CheckButton(label="Lancer au démarrage de la session")
+        chk_autostart = Gtk.CheckButton(label="Launch at session startup")
         chk_autostart.set_active(is_autostart_enabled())
         box.pack_start(chk_autostart, False, False, 0)
 
-        dlg.add_button("Appliquer", Gtk.ResponseType.OK)
+        dlg.add_button("Apply", Gtk.ResponseType.OK)
 
         # Show all controls first so GTK calculates full window dimensions
         dlg.show_all()

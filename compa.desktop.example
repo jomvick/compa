@@ -6,7 +6,7 @@ Comment=A living Tux companion for Linux
 # NOTE: this is a reference template with a relative Exec path — it only
 # works if launched from within this project folder. Do NOT copy this file
 # as-is into ~/.config/autostart/: it will fail to find companion.py there.
-# Use the "Lancer au demarrage de la session" toggle in Compa's Reglages
+# Use the "Launch at session startup" toggle in Compa's Settings
 # instead — it generates a working autostart entry with the correct
 # absolute path automatically.
 Exec=python3 companion.py

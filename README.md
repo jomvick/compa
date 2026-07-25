@@ -2,85 +2,80 @@
 
 > Bring Linux to Life.
 
-Un petit Tux animé, discret et interactif, qui vit au-dessus du bureau Linux.
+A small, animated, discreet, and interactive Tux that lives on your Linux desktop.
 
-La direction produit, les limites de la V1 et les critères de sortie sont dans
-[le MVP](mvp.md). La vision long-terme et les règles du projet sont dans
-[le manifeste](THE_COMPA_MANIFESTO.md). Les versions à venir sont listées dans
-[la roadmap](ROADMAP.md).
+Product direction, V1 scope, and exit criteria are in [the MVP](mvp.md).
+Long-term vision and project rules are in [the manifesto](THE_COMPA_MANIFESTO.md).
+Upcoming versions are listed in [the roadmap](ROADMAP.md).
 
-## Licence
+## License
 
-Compa est open source sous licence [MIT](LICENSE).
+Compa is open source under the [MIT](LICENSE) license.
 
-## Prérequis Système & Dépendances
+## System Requirements & Dependencies
 
-Compa utilise **GTK3 (PyGObject)** et **Cairo** pour offrir une transparence par pixel à 100% sans bordure sur les bureaux Linux (X11 et Wayland).
+Compa uses **GTK3 (PyGObject)** and **Cairo** to deliver 100% per-pixel transparency with no borders on Linux desktops (X11 and Wayland).
 
-### 1. Installation des paquets système
+### 1. Install system packages
 
-Selon votre distribution, installez les dépendances système requises (GTK3, PyGObject, Cairo, Pillow) :
+Depending on your distribution, install the required system dependencies (GTK3, PyGObject, Cairo, Pillow):
 
-* **Ubuntu / Debian / Mint** :
+* **Ubuntu / Debian / Mint**:
   ```bash
   sudo apt update
   sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil
   ```
 
-* **Fedora / RHEL** :
+* **Fedora / RHEL**:
   ```bash
   sudo dnf install python3-gobject gtk3 python3-pillow
   ```
 
-* **Arch Linux / Manjaro** :
+* **Arch Linux / Manjaro**:
   ```bash
   sudo pacman -S python-gobject gtk3 python-pillow
   ```
 
-### 2. Installation Python (Virtual environment / Pip)
+### 2. Python installation (Virtual environment / Pip)
 
-Si vous utilisez un environnement virtuel Python (`venv`), installez les dépendances listées dans `requirements.txt` :
+If you use a Python virtual environment (`venv`), install the dependencies listed in `requirements.txt`:
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-> **Note** : L'installation de `PyGObject` ou `pycairo` via `pip` nécessite les en-têtes de développement système (`libgirepository1.0-dev` / `cairo-devel`). Il est recommandé d'utiliser les paquets de votre distribution ci-dessus.
+> **Note**: Installing `PyGObject` or `pycairo` via `pip` requires system development headers (`libgirepository1.0-dev` / `cairo-devel`). Using your distribution packages (above) is recommended.
 
-## Lancer la démo
+## Running the demo
 
 ```bash
 python3 companion.py
 ```
 
-Le script utilise automatiquement `GDK_BACKEND=x11` pour forcer le rendu en overlay transparent et sans aucune bordure sur Wayland et X11.
+The script automatically uses `GDK_BACKEND=x11` to force transparent overlay rendering with zero borders on both Wayland and X11.
 
-## Démarrage automatique de session (Autostart)
+## Session autostart
 
-La façon fiable d'activer le démarrage automatique : cochez
-**"Lancer au démarrage de la session"** dans les Réglages de Tux (clic droit
-sur Tux → Réglages…). Compa génère alors lui-même un fichier XDG Autostart
-correct (avec le chemin absolu vers `companion.py`) dans
+The reliable way to enable autostart: check
+**"Launch at session startup"** in Tux's Settings (right-click
+on Tux → Settings…). Compa then generates its own XDG Autostart file
+(with the absolute path to `companion.py`) in
 `~/.config/autostart/compa.desktop`.
 
-Un fichier [`compa.desktop.example`](compa.desktop.example) est fourni à
-titre de référence uniquement — ne le copiez pas tel quel dans
-`~/.config/autostart/`, son chemin relatif ne fonctionnera pas en dehors du
-dossier du projet.
+A [`compa.desktop.example`](compa.desktop.example) file is provided as a
+reference only — do not copy it as-is into
+`~/.config/autostart/`; its relative path will not work outside the
+project directory.
 
-## Gestes & Interactions
+## Gestures & Interactions
 
-- **clic simple** : Tux saute (physique sinusoïdale fluide) ;
-- **double-clic** : Tux salue (`wave`) et affiche une bulle de dialogue ;
-- **glisser-déposer (Drag & Drop)** : cliquez et déplacez Tux librement sur votre écran ;
-- **clic droit** : ouvre le menu contextuel (Nourrir Tux 🐟, le Réveiller, Jouer, changer sa Personnalité ou ouvrir les Réglages).
+- **single click**: Tux jumps (smooth sinusoidal physics);
+- **double click**: Tux waves and shows a speech bubble;
+- **drag & drop**: click and drag Tux freely across your screen;
+- **right click**: opens the context menu (Feed Tux 🐟, Wake up, Play, change Personality, or open Settings).
 
-## Portée de cette tranche
+## Scope of this slice
 
-La démo rend déjà le bureau vivant : animations continues, événements aléatoires,
-émotions, phrases rares et personnalités qui modulent réellement les probabilités
-et la vitesse. Elle exclut volontairement IA, monitoring, launcher, widgets et
-toute fonction de productivité — ce socle ne change pas de forme, y compris dans
-les versions futures (voir [la roadmap](ROADMAP.md)).
+The demo already makes the desktop feel alive: continuous animations, random events, emotions, rare phrases, and personalities that genuinely modulate probabilities and speed. It intentionally excludes AI, monitoring, launchers, widgets, and any productivity features — this foundation will not change shape in future versions either (see [the roadmap](ROADMAP.md)).
 
-Les intégrations système restantes — vrai multi-écran et emballage `.deb`/Flatpak — viennent après la démo initiale, par cible de distribution afin de respecter les règles X11/Wayland de chacune.
+Remaining system integrations — true multi-monitor support and `.deb`/Flatpak packaging — come after the initial demo, per distribution target, respecting each platform's X11/Wayland rules.
