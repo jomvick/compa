@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: compa
+Source: https://github.com/jomvick/compa
+
+Files: *
+Copyright: 2026 jomvick
+License: MIT
+
+License: MIT
+ See the LICENSE file at the root of this repository for the full MIT
+ license text.

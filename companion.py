@@ -165,16 +165,86 @@ class Companion:
 
         self._load_sprites()
 
-        # place near bottom-right of screen
-        if screen:
-            sw = screen.get_width()
-            sh = screen.get_height()
-        else:
-            sw, sh = 1920, 1080
-        self.win.move(sw - self.WIN_W - 40, sh - self.WIN_H - 60)
+        # Place near the bottom-right corner of whichever monitor currently
+        # has the pointer, instead of always assuming a single primary
+        # display. This matters as soon as there is more than one monitor.
+        mon = self._monitor_at_pointer()
+        self.win.move(mon.x + mon.width - self.WIN_W - 40,
+                       mon.y + mon.height - self.WIN_H - 60)
         self.win.show_all()
 
         GLib.timeout_add(40, self._tick)   # ~25 fps
+
+    # ── multi-monitor helpers ──────────────────────────────────────────── #
+
+    def _monitor_at_pointer(self) -> "Gdk.Rectangle":
+        """Geometry of the monitor currently under the mouse pointer.
+
+        Used only at startup, so Tux appears on the screen the user is
+        actually looking at rather than always on the "primary" one.
+        """
+        fallback = Gdk.Rectangle()
+        fallback.x, fallback.y, fallback.width, fallback.height = 0, 0, 1920, 1080
+
+        display = Gdk.Display.get_default()
+        if display is None:
+            return fallback
+
+        seat = display.get_default_seat()
+        pointer = seat.get_pointer() if seat else None
+        if pointer is not None:
+            _screen, px, py = pointer.get_position()
+            monitor = display.get_monitor_at_point(px, py)
+        else:
+            monitor = display.get_monitor(0)
+
+        if monitor is None:
+            monitor = display.get_monitor(0)
+        return monitor.get_geometry() if monitor else fallback
+
+    def _monitor_at_window(self) -> "Gdk.Rectangle":
+        """Geometry of the monitor Tux's window currently sits on.
+
+        Used continuously (walking bounds, settings dialog placement) so
+        behaviour stays correct if the window is dragged to another screen,
+        or if a monitor is unplugged/reconnected while Compa is running.
+        """
+        fallback = Gdk.Rectangle()
+        fallback.x, fallback.y, fallback.width, fallback.height = 0, 0, 1920, 1080
+
+        display = Gdk.Display.get_default()
+        if display is None:
+            return fallback
+
+        wx, wy = self.win.get_position()
+        monitor = display.get_monitor_at_point(wx + self.WIN_W // 2,
+                                                 wy + self.WIN_H // 2)
+        if monitor is None:
+            # The window ended up outside every known monitor — most likely
+            # because a monitor was unplugged. Fall back to monitor 0 and
+            # let _ensure_on_screen() below relocate the window there.
+            monitor = display.get_monitor(0)
+        return monitor.get_geometry() if monitor else fallback
+
+    def _ensure_on_screen(self) -> None:
+        """Relocate Tux back onto a real monitor if his current position
+        no longer belongs to any (e.g. the monitor he was on got
+        unplugged, or resolution changed under him)."""
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        wx, wy = self.win.get_position()
+        monitor = display.get_monitor_at_point(wx + self.WIN_W // 2,
+                                                 wy + self.WIN_H // 2)
+        if monitor is not None:
+            return  # still on a valid monitor, nothing to do
+
+        primary = display.get_primary_monitor() or display.get_monitor(0)
+        if primary is None:
+            return
+        geo = primary.get_geometry()
+        self.win.move(geo.x + geo.width - self.WIN_W - 40,
+                       geo.y + geo.height - self.WIN_H - 60)
 
     # ── sprites ─────────────────────────────────────────────────────────── #
 
@@ -268,6 +338,8 @@ class Companion:
             if self.is_dragging:
                 self.is_dragging = False
                 self._set_state("idle", 0.1)
+                # Dropped on another monitor? Make sure we're still valid.
+                self._ensure_on_screen()
             elif time.monotonic() - self.click_start_time < 0.25:
                 self.jump()
             return True
@@ -354,21 +426,22 @@ class Companion:
         # Show all controls first so GTK calculates full window dimensions
         dlg.show_all()
 
-        # Calculate exact position offset to the side of Tux
+        # Calculate exact position offset to the side of Tux, clamped to
+        # the monitor Tux is currently on (not the full virtual desktop).
         wx, wy = self.win.get_position()
-        screen = Gdk.Screen.get_default()
-        sw = screen.get_width() if screen else 1920
-        sh = screen.get_height() if screen else 1080
+        mon = self._monitor_at_window()
+        mx, my, mw, mh = mon.x, mon.y, mon.width, mon.height
 
         dw, dh = dlg.get_size()
         dw = max(dw, 340)
         dh = max(dh, 440)
 
-        if wx > dw + 50:
+        if wx - mx > dw + 50:
             target_x = wx - dw - 40
         else:
             target_x = wx + self.WIN_W + 40
-        target_y = min(max(30, wy - 120), sh - dh - 50)
+        target_x = min(max(mx, target_x), mx + mw - dw)
+        target_y = min(max(my + 30, wy - 120), my + mh - dh - 50)
 
         dlg.move(target_x, target_y)
 
@@ -540,17 +613,24 @@ class Companion:
                 self.is_blinking = False
                 self.next_blink  = now + random.uniform(2.5, 6.0)
 
-        # walk
+        # walk — stay within the bounds of the monitor Tux is currently on,
+        # not the combined virtual desktop (which would let him "walk" into
+        # the gap between two monitors of different heights/positions).
         if self.state == "walk" and not self.is_dragging:
             wx, wy = self.win.get_position()
             step = max(1, round(3.5 * self.speed * self.personality.speed))
             step *= self.walk_direction
-            screen = Gdk.Screen.get_default()
-            sw = screen.get_width() if screen else 1920
-            if not (0 <= wx + step <= sw - self.WIN_W):
+            mon = self._monitor_at_window()
+            min_x = mon.x
+            max_x = mon.x + mon.width - self.WIN_W
+            if not (min_x <= wx + step <= max_x):
                 self.walk_direction *= -1
                 step *= -1
             self.win.move(wx + step, wy)
+
+        # Every tick is cheap enough to also double-check we're still on a
+        # real monitor (handles unplug / resolution change while running).
+        self._ensure_on_screen()
 
         # expire bubble
         if now > self.bubble_until:

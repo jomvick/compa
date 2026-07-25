@@ -54,6 +54,14 @@ python3 companion.py
 
 The script automatically uses `GDK_BACKEND=x11` to force transparent overlay rendering with zero borders on both Wayland and X11.
 
+## Multi-monitor
+
+Compa places itself on whichever monitor currently has the pointer at
+startup, and its walking/settings-dialog placement stay clamped to the
+monitor it's currently on (not the combined virtual desktop). If a monitor
+is unplugged or resolution changes while Compa is running, it relocates
+itself back onto a valid monitor automatically.
+
 ## Session autostart
 
 The reliable way to enable autostart: check
@@ -74,8 +82,33 @@ project directory.
 - **drag & drop**: click and drag Tux freely across your screen;
 - **right click**: opens the context menu (Feed Tux 🐟, Wake up, Play, change Personality, or open Settings).
 
+## Building packages
+
+Packaging scaffolding lives under [`packaging/`](packaging/). Both are
+work-in-progress starting points, not push-button production pipelines yet
+— see the TODO notes each script prints.
+
+* **AppImage**:
+  ```bash
+  bash packaging/appimage/build-appimage.sh
+  ```
+  Downloads `linuxdeploy` + its GTK plugin on first run, bundles GTK3 and
+  produces `packaging/appimage/build/Compa*.AppImage`. Build on an
+  Ubuntu/Debian machine for the widest glibc compatibility, then **test the
+  resulting AppImage on a different machine** — that's the real portability
+  check.
+
+* **.deb**:
+  ```bash
+  bash packaging/debian/build-deb.sh
+  ```
+  Requires `build-essential debhelper devscripts`. Produces a `.deb` one
+  directory above the project root.
+
 ## Scope of this slice
 
 The demo already makes the desktop feel alive: continuous animations, random events, emotions, rare phrases, and personalities that genuinely modulate probabilities and speed. It intentionally excludes AI, monitoring, launchers, widgets, and any productivity features — this foundation will not change shape in future versions either (see [the roadmap](ROADMAP.md)).
 
-Remaining system integrations — true multi-monitor support and `.deb`/Flatpak packaging — come after the initial demo, per distribution target, respecting each platform's X11/Wayland rules.
+Remaining work before V1.1 is closed — validating the compatibility matrix
+across distros/desktop environments, and cutting a demo video — is tracked
+in [the roadmap](ROADMAP.md).

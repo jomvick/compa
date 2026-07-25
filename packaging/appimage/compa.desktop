@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Compa
+GenericName=Desktop Companion
+Comment=A living Tux companion for the Linux desktop
+Exec=AppRun
+Icon=compa
+Terminal=false
+Categories=Utility;

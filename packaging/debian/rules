@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# Nothing to compile — pure Python.
+
+override_dh_auto_install:
+	install -d debian/compa/usr/share/compa
+	cp -r companion.py assets debian/compa/usr/share/compa/
+	install -d debian/compa/usr/bin
+	printf '#!/bin/sh\nexport GDK_BACKEND=x11\nexec python3 /usr/share/compa/companion.py "$$@"\n' \
+		> debian/compa/usr/bin/compa
+	chmod 755 debian/compa/usr/bin/compa
+	install -d debian/compa/usr/share/applications
+	install -m 644 packaging/appimage/compa.desktop \
+		debian/compa/usr/share/applications/compa.desktop
