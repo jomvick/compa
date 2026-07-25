@@ -4,7 +4,6 @@
 
 A small, animated, discreet, and interactive Tux that lives on your Linux desktop.
 
-Product direction, V1 scope, and exit criteria are in [the MVP](mvp.md).
 Long-term vision and project rules are in [the manifesto](THE_COMPA_MANIFESTO.md).
 Upcoming versions are listed in [the roadmap](ROADMAP.md).
 
