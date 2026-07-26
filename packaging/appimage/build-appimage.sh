@@ -1,29 +1,88 @@
 #!/bin/bash
-# Build Compa.AppImage.
+# Build Compa.AppImage inside an Ubuntu 22.04 container via podman.
 #
-# Must be run on a Linux machine with GTK3 already installed (build on an
-# Ubuntu/Debian box for best compatibility with older glibc — AppImages
-# generally only run on distros with a glibc >= the one they were built
-# against).
+# Why a container?
+#   1. glibc compatibility — AppImages must be built on the oldest glibc
+#      you want to support. Ubuntu 22.04 has a much older glibc than
+#      Fedora, giving the widest portability.
+#   2. Python is *copied* (not symlinked) so the AppImage carries its own
+#      interpreter, avoiding path/ABI mismatches on the target machine.
+#   3. The linuxdeploy GTK plugin ships its own strip binary that chokes
+#      on Fedora's .relr.dyn ELF sections — Ubuntu's toolchain avoids this.
 #
-# Requirements on the build machine:
-#   sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil wget
-#
-# This script downloads linuxdeploy + its GTK plugin (which knows how to
-# bundle GTK3, its typelibs, icon themes, etc.) the first time it runs, then
-# reuses the cached copies on subsequent runs.
+# Requirements: podman
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/build"
-APPDIR="${BUILD_DIR}/Compa.AppDir"
-TOOLS_DIR="${SCRIPT_DIR}/.tools"
+CONTAINER_TAG="compa-builder:ubuntu-2204"
 
-mkdir -p "${TOOLS_DIR}" "${BUILD_DIR}"
+podman rm -f compa-builder 2>/dev/null || true
 
-fetch_tool () {
+# Containerfile for the build environment
+cat > /tmp/Containerfile.compa << 'DOCKERFILE'
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y -qq \
+    python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil \
+    wget file pkg-config librsvg2-dev libgirepository1.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+ENTRYPOINT ["/build/_build-inside.sh"]
+DOCKERFILE
+
+# Build the container image if not cached
+if ! podman image exists "${CONTAINER_TAG}" 2>/dev/null; then
+    echo "Building container image (one-time)..."
+    podman build -t "${CONTAINER_TAG}" -f /tmp/Containerfile.compa
+fi
+
+# Write the in-container build script
+cat > "${BUILD_DIR}/_build-inside.sh" << 'INSIDE'
+#!/bin/bash
+set -euo pipefail
+ARCH="$(uname -m)"
+APPDIR="/build/Compa.AppDir"
+TOOLS_DIR="/build/.tools"
+PYTHON_LIBS="${APPDIR}/usr/lib/python3-libs"
+
+mkdir -p "${TOOLS_DIR}" "${APPDIR}/usr/bin" "${APPDIR}/usr/share/compa" \
+         "${APPDIR}/usr/share/applications" \
+         "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
+
+echo "Copying application files..."
+cp /src/companion.py        "${APPDIR}/usr/share/compa/"
+cp -r /src/assets            "${APPDIR}/usr/share/compa/"
+cp /src/packaging/appimage/AppRun "${APPDIR}/AppRun"
+chmod +x "${APPDIR}/AppRun"
+cp /src/packaging/appimage/compa.desktop "${APPDIR}/usr/share/applications/"
+cp /src/packaging/appimage/compa.desktop "${APPDIR}/compa.desktop"
+
+echo "Bundling Python interpreter..."
+cp "$(command -v python3)" "${APPDIR}/usr/bin/python3"
+
+echo "Bundling Python packages (gi, cairo, PIL)..."
+mkdir -p "${PYTHON_LIBS}"
+SYS_DIRS=$(python3 -c "import site; print('\n'.join(site.getsitepackages()))")
+for mod in gi cairo PIL; do
+    found=0
+    for d in $SYS_DIRS; do
+        if [ -d "$d/$mod" ]; then
+            cp -r "$d/$mod" "$PYTHON_LIBS/"
+            found=1
+            break
+        fi
+    done
+    if [ "$found" = "0" ]; then
+        echo "WARNING: could not find $mod in site-packages" >&2
+    fi
+done
+
+cp /src/assets/tux/poses/idle.png "${APPDIR}/compa.png"
+
+fetch_tool() {
     local url="$1" out="$2"
     if [ ! -x "${out}" ]; then
         echo "Downloading $(basename "${out}")..."
@@ -31,8 +90,6 @@ fetch_tool () {
         chmod +x "${out}"
     fi
 }
-
-ARCH="$(uname -m)"
 
 fetch_tool \
     "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage" \
@@ -46,94 +103,44 @@ fetch_tool \
     "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage" \
     "${TOOLS_DIR}/appimagetool-${ARCH}.AppImage"
 
-echo "Cleaning previous AppDir..."
-rm -rf "${APPDIR}"
-mkdir -p "${APPDIR}/usr/bin" "${APPDIR}/usr/share/compa" "${APPDIR}/usr/share/applications" "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
-
-echo "Copying application files..."
-cp "${PROJECT_ROOT}/companion.py" "${APPDIR}/usr/share/compa/"
-cp -r "${PROJECT_ROOT}/assets"     "${APPDIR}/usr/share/compa/"
-cp "${SCRIPT_DIR}/AppRun"          "${APPDIR}/AppRun"
-chmod +x "${APPDIR}/AppRun"
-cp "${SCRIPT_DIR}/compa.desktop"   "${APPDIR}/usr/share/applications/"
-cp "${SCRIPT_DIR}/compa.desktop"   "${APPDIR}/compa.desktop"
-
-ln -sf "$(command -v python3)" "${APPDIR}/usr/bin/python3"
-
-# Bundle PyGObject, pycairo, and Pillow into the AppDir. These are
-# C-extension / compiled Python packages that linuxdeploy's GTK plugin
-# does not pick up automatically, yet companion.py cannot start without
-# them. We copy the system-installed versions because pip-installing
-# them requires build toolchains (meson, python3-devel, etc.) that may
-# not be available, and their source builds frequently fail inside the
-# ephemeral AppDir python3-libs target.
-echo "Bundling PyGObject, pycairo, Pillow..."
-PYTHON_LIBS="${APPDIR}/usr/lib/python3-libs"
-mkdir -p "${PYTHON_LIBS}"
-# Resolve system site-packages dirs, excluding user-local and /usr/local.
-# On Fedora, compiled Python packages (gi, cairo, PIL) live under
-# /usr/lib64/python3*/site-packages.
-SYS_DIRS=$(python3 -c "
-import sys
-for p in sys.path:
-    if 'site-packages' in p and '.local' not in p and '/usr/local/' not in p:
-        print(p)
-")
-for mod in gi cairo PIL; do
-    found=0
-    for d in $SYS_DIRS; do
-        if [ -d "$d/$mod" ]; then
-            cp -r "$d/$mod" "$PYTHON_LIBS/"
-            found=1
-            break
-        fi
-    done
-    if [ "$found" = "0" ]; then
-        # Fallback: resolve via Python import (may pick user site, but
-        # better than nothing)
-        mod_path=$(python3 -c "import $mod; print($mod.__path__[0])" 2>/dev/null) || true
-        if [ -n "$mod_path" ]; then
-            cp -r "$mod_path" "$PYTHON_LIBS/"
-        fi
-    fi
-done
-
-if [ ! -f "${PROJECT_ROOT}/assets/tux/README.md" ] && [ ! -d "${PROJECT_ROOT}/assets/tux/poses" ]; then
-    echo "WARNING: assets/tux/poses not found — the AppImage will run with no sprites." >&2
-fi
-
-# appimagetool requires Icon=compa in the desktop file to resolve to a
-# compa.png at the AppDir root. Copy the idle sprite as placeholder.
-cp "${PROJECT_ROOT}/assets/tux/poses/idle.png" "${APPDIR}/compa.png"
+# FUSE is not available in the container, extract AppImages instead
+echo "Extracting linuxdeploy..."
+"${TOOLS_DIR}/linuxdeploy-${ARCH}.AppImage" --appimage-extract
+mv squashfs-root "${TOOLS_DIR}/linuxdeploy-extracted"
 
 echo "Running linuxdeploy with the GTK plugin..."
 export DEPLOY_GTK_VERSION=3
-# Build AppDir only (no --output appimage). The internal strip step
-# may fail on Fedora's .relr.dyn section — that's cosmetic, so we
-# tolerate a non-zero exit code.
-"${TOOLS_DIR}/linuxdeploy-${ARCH}.AppImage" \
+"${TOOLS_DIR}/linuxdeploy-extracted/AppRun" \
     --appdir "${APPDIR}" \
     --plugin gtk \
-    --icon-file "${PROJECT_ROOT}/assets/tux/poses/idle.png" \
-    --icon-filename compa \
-    --desktop-file "${SCRIPT_DIR}/compa.desktop" || true
+    --icon-file /src/assets/tux/poses/idle.png \
+    --desktop-file /src/packaging/appimage/compa.desktop || true
 
 echo "Running appimagetool..."
-"${TOOLS_DIR}/appimagetool-${ARCH}.AppImage" \
+"${TOOLS_DIR}/appimagetool-${ARCH}.AppImage" --appimage-extract
+mv squashfs-root "${TOOLS_DIR}/appimagetool-extracted"
+"${TOOLS_DIR}/appimagetool-extracted/AppRun" \
     "${APPDIR}" \
-    "${BUILD_DIR}/Compa-x86_64.AppImage"
+    "/build/Compa-x86_64.AppImage"
+
+echo "Build finished successfully."
+INSIDE
+chmod +x "${BUILD_DIR}/_build-inside.sh"
+
+echo "Starting container build..."
+podman run --rm --name compa-builder \
+    -v "${PROJECT_ROOT}:/src:ro,z" \
+    -v "${BUILD_DIR}:/build:z" \
+    "${CONTAINER_TAG}"
+
+echo ""
+echo "AppImage produced at: ${BUILD_DIR}/Compa-x86_64.AppImage"
+ls -lh "${BUILD_DIR}/Compa-x86_64.AppImage"
 
 cat <<'EOF'
-
-Done (or check the log above for errors).
 
 TODO before this is production-ready:
   1. Test the resulting Compa*.AppImage on a *different* machine/distro
      than the one it was built on — that's the real portability test.
-  2. The system-package copying approach for PyGObject/pycairo/Pillow
-     works on the build machine but bundles .so files compiled against
-     the build machine's glibc — that's fine for AppImage portability
-     as long as the build machine is the oldest glibc target.
-  3. Replace the icon-file above with a proper square app icon once one
-     exists (currently reusing the idle sprite as a placeholder).
+  2. Replace the placeholder icon (idle.png) with a proper square app icon.
 EOF
