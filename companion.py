@@ -17,8 +17,10 @@ import os
 os.environ["GDK_BACKEND"] = "x11"
 
 import io
+import json
 import math
 import random
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +64,62 @@ PERSONALITIES = {
 AUTOSTART_DIR = Path.home() / ".config" / "autostart"
 AUTOSTART_FILE = AUTOSTART_DIR / "compa.desktop"
 
+CONFIG_DIR = Path.home() / ".config" / "compa"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+LOCK_FILE = CONFIG_DIR / "compa.pid"
+
+
+def acquire_single_instance_lock() -> None:
+    """Refuse to start a second Compa if one is already running.
+
+    Best-effort: if the lock file is stale (process no longer exists, or
+    we can't even check — e.g. no /proc, or a permissions quirk) we just
+    take over the lock rather than blocking the user forever because of a
+    leftover file from a crash.
+    """
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if LOCK_FILE.is_file():
+            try:
+                old_pid = int(LOCK_FILE.read_text(encoding="utf-8").strip())
+                os.kill(old_pid, 0)  # raises if that PID isn't running
+                print(f"Compa is already running (PID {old_pid}). Exiting.")
+                sys.exit(1)
+            except (ValueError, ProcessLookupError, PermissionError, OSError):
+                pass  # stale/unreadable lock — fall through and take it
+        LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass  # can't lock — worst case, allow a duplicate rather than crash
+
+
+def release_single_instance_lock() -> None:
+    try:
+        if LOCK_FILE.is_file() and LOCK_FILE.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            LOCK_FILE.unlink()
+    except OSError:
+        pass
+
+
+def load_config() -> dict:
+    """Best-effort read of the persisted settings. Any problem (missing
+    file, corrupt JSON, unreadable) just means "start from defaults" —
+    persistence is a nicety, never something that should crash startup."""
+    try:
+        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return {}
+
+
+def save_config(data: dict) -> None:
+    """Best-effort write of the current settings. Failures are swallowed —
+    losing the ability to remember settings should never crash or
+    interrupt the running companion."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
 
 def is_autostart_enabled() -> bool:
     return AUTOSTART_FILE.is_file()
@@ -98,12 +156,17 @@ class Companion:
     WIN_H = 210
 
     def __init__(self) -> None:
-        self.size = 1.0
-        self.speed = 1.0
-        self.opacity = 1.0
-        self.keep_above = True
-        self.animations_enabled = True
-        self.personality = PERSONALITIES["Curious"]
+        config = load_config()
+
+        self.size = config.get("size", 1.0)
+        self.speed = config.get("speed", 1.0)
+        self.opacity = config.get("opacity", 1.0)
+        self.keep_above = config.get("keep_above", True)
+        self.animations_enabled = config.get("animations_enabled", True)
+        self.personality = PERSONALITIES.get(
+            config.get("personality", "Curious"), PERSONALITIES["Curious"]
+        )
+        self._saved_pos = (config.get("pos_x"), config.get("pos_y"))
 
         # animation state
         self.state = "idle"
@@ -116,6 +179,7 @@ class Companion:
 
         # life timer
         self.last_event = time.monotonic()
+        self._last_autosave = time.monotonic()
 
         # bubble
         self.bubble_text = ""
@@ -136,11 +200,26 @@ class Companion:
         self.sprite_dir = Path(__file__).parent / "assets" / "tux" / "poses"
         self.pixbufs: dict[str, GdkPixbuf.Pixbuf] = {}
 
+        # input shape (click-through outside Tux's actual, non-transparent
+        # pixels) — tracks (sprite key, rounded dx, rounded dy) so we only
+        # recombine the region when something actually changed, not on
+        # every single ~40ms tick.
+        self._last_shape_sig: tuple | None = None
+
         # ── GTK window ──────────────────────────────────────────────────── #
         # POPUP under XWayland = X11 override-redirect: WM cannot decorate it.
         self.win = Gtk.Window(type=Gtk.WindowType.POPUP)
         self.win.set_app_paintable(True)
-        self.win.set_keep_above(True)
+        self.win.set_keep_above(self.keep_above)
+        # Belt-and-suspenders: POPUP/override-redirect windows are already
+        # excluded from taskbar/Alt-Tab/pager on every WM we've tested, but
+        # these hints make that explicit rather than relying purely on
+        # window-type behaviour that could differ across WMs.
+        self.win.set_skip_taskbar_hint(True)
+        self.win.set_skip_pager_hint(True)
+        # Clicking Tux must never steal keyboard focus from whatever the
+        # user was typing in — he's a companion, not an application window.
+        self.win.set_accept_focus(False)
 
         # RGBA visual for per-pixel transparency
         screen = Gdk.Screen.get_default()
@@ -165,12 +244,24 @@ class Companion:
 
         self._load_sprites()
 
-        # Place near the bottom-right corner of whichever monitor currently
-        # has the pointer, instead of always assuming a single primary
-        # display. This matters as soon as there is more than one monitor.
-        mon = self._monitor_at_pointer()
-        self.win.move(mon.x + mon.width - self.WIN_W - 40,
-                       mon.y + mon.height - self.WIN_H - 60)
+        # Restore the last saved position if we have one and it still
+        # points at a real monitor; otherwise fall back to the
+        # bottom-right corner of whichever monitor currently has the
+        # pointer (e.g. first launch, or the saved monitor is gone).
+        saved_x, saved_y = self._saved_pos
+        display = Gdk.Display.get_default()
+        restored = False
+        if saved_x is not None and saved_y is not None and display is not None:
+            monitor = display.get_monitor_at_point(
+                int(saved_x) + self.WIN_W // 2, int(saved_y) + self.WIN_H // 2
+            )
+            if monitor is not None:
+                self.win.move(int(saved_x), int(saved_y))
+                restored = True
+        if not restored:
+            mon = self._monitor_at_pointer()
+            self.win.move(mon.x + mon.width - self.WIN_W - 40,
+                           mon.y + mon.height - self.WIN_H - 60)
         self.win.show_all()
 
         GLib.timeout_add(40, self._tick)   # ~25 fps
@@ -261,6 +352,10 @@ class Companion:
             loader.write(buf.getvalue())
             loader.close()
             self.pixbufs[path.stem] = loader.get_pixbuf()
+        # Sprites just changed size (e.g. the "Size" slider in Settings) —
+        # force the input shape to be recomputed on the next draw instead
+        # of comparing against a signature computed for the old size.
+        self._last_shape_sig = None
 
     # ── state helpers ───────────────────────────────────────────────────── #
 
@@ -299,6 +394,25 @@ class Companion:
     def set_personality(self, name: str) -> None:
         self.personality = PERSONALITIES[name]
         self._say(f"I'm feeling {name.lower()} today.")
+
+    # ── persistence ─────────────────────────────────────────────────────── #
+
+    def _save_config(self) -> None:
+        wx, wy = self.win.get_position()
+        save_config({
+            "size": self.size,
+            "speed": self.speed,
+            "opacity": self.opacity,
+            "keep_above": self.keep_above,
+            "animations_enabled": self.animations_enabled,
+            "personality": self.personality.label,
+            "pos_x": wx,
+            "pos_y": wy,
+        })
+
+    def _quit(self) -> None:
+        self._save_config()
+        Gtk.main_quit()
 
     # ── mouse events ────────────────────────────────────────────────────── #
 
@@ -340,6 +454,7 @@ class Companion:
                 self._set_state("idle", 0.1)
                 # Dropped on another monitor? Make sure we're still valid.
                 self._ensure_on_screen()
+                self._save_config()
             elif time.monotonic() - self.click_start_time < 0.25:
                 self.jump()
             return True
@@ -362,7 +477,7 @@ class Companion:
 
         self._menu_item(menu, "Settings…",  self._open_settings)
         menu.append(Gtk.SeparatorMenuItem())
-        self._menu_item(menu, "Quit",    Gtk.main_quit)
+        self._menu_item(menu, "Quit",    self._quit)
 
         menu.show_all()
         menu.popup_at_pointer(event)
@@ -463,6 +578,7 @@ class Companion:
             set_autostart(chk_autostart.get_active())
 
             self._load_sprites()
+            self._save_config()
 
         self.win.set_keep_above(self.keep_above)
         dlg.destroy()
@@ -523,8 +639,18 @@ class Companion:
             dx = (self.WIN_W - pw) / 2.0
             dy = self.WIN_H - ph + bob_y - 10
 
+            # Soft ground shadow, drawn first so the sprite sits on top of
+            # it. Shrinks/fades while airborne (jump) so it reads as a
+            # ground-contact shadow rather than a decal glued to Tux.
+            self._draw_shadow(cr, pw, bob_y)
+
             Gdk.cairo_set_source_pixbuf(cr, pixbuf, dx, dy)
             cr.paint_with_alpha(self.opacity)
+
+            # Only Tux's actual (non-transparent) pixels should receive
+            # clicks — the empty margin around him must click through to
+            # whatever is on the desktop underneath.
+            self._update_input_shape(key, pixbuf, dx, dy)
 
             # sleep Zzz
             if self.state == "sleep":
@@ -549,6 +675,40 @@ class Companion:
 
         return False
 
+    def _draw_shadow(self, cr: cairo.Context, pw: float, bob_y: float) -> None:
+        """Soft radial-gradient ground shadow under Tux.
+
+        Without this, Tux reads as a flat sticker floating over the
+        desktop rather than a character actually standing on it. Cairo
+        has no built-in blur, so a radial gradient fading to fully
+        transparent gives a cheap, good-enough soft edge.
+        """
+        floor_y = self.WIN_H - 8.0
+        cx = self.WIN_W / 2.0
+
+        # While jumping, the higher off the ground Tux is, the smaller and
+        # fainter the shadow — sells the "airborne" feeling instead of the
+        # shadow just trailing him around like a fixed decal.
+        lift = max(0.0, -bob_y) if self.state == "jump" else 0.0
+        shrink = max(0.5, 1.0 - lift / 70.0)
+
+        radius = (pw * 0.42) * shrink
+        if radius <= 1.0:
+            return
+        squash = 0.30  # flatten the circle into a ground-hugging ellipse
+        alpha = 0.30 * shrink
+
+        cr.save()
+        cr.translate(cx, floor_y)
+        cr.scale(1.0, squash)
+        gradient = cairo.RadialGradient(0, 0, 0, 0, 0, radius)
+        gradient.add_color_stop_rgba(0.0, 0, 0, 0, alpha)
+        gradient.add_color_stop_rgba(1.0, 0, 0, 0, 0.0)
+        cr.set_source(gradient)
+        cr.arc(0, 0, radius, 0, 2 * math.pi)
+        cr.fill()
+        cr.restore()
+
     def _draw_bubble(self, cr: cairo.Context, text: str) -> None:
         cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(10)
@@ -561,15 +721,24 @@ class Companion:
         bx = (self.WIN_W - bw) / 2.0
         by = 8.0
 
-        # rounded rect
-        cr.new_sub_path()
-        cr.arc(bx + bw - r, by + r,      r, -math.pi / 2, 0)
-        cr.arc(bx + bw - r, by + bh - r, r, 0,            math.pi / 2)
-        cr.arc(bx + r,      by + bh - r, r, math.pi / 2,  math.pi)
-        cr.arc(bx + r,      by + r,      r, math.pi,      3 * math.pi / 2)
-        cr.close_path()
+        def _rounded_rect(offset_x: float = 0.0, offset_y: float = 0.0) -> None:
+            x, y = bx + offset_x, by + offset_y
+            cr.new_sub_path()
+            cr.arc(x + bw - r, y + r,      r, -math.pi / 2, 0)
+            cr.arc(x + bw - r, y + bh - r, r, 0,            math.pi / 2)
+            cr.arc(x + r,      y + bh - r, r, math.pi / 2,  math.pi)
+            cr.arc(x + r,      y + r,      r, math.pi,      3 * math.pi / 2)
+            cr.close_path()
 
-        cr.set_source_rgba(1, 1, 1, 0.96)
+        # Faint soft shadow behind the bubble so it stays legible over both
+        # light and dark/busy wallpapers, not just over the white fill's
+        # own contrast against a same-toned background.
+        _rounded_rect(0.0, 2.0)
+        cr.set_source_rgba(0, 0, 0, 0.18)
+        cr.fill()
+
+        _rounded_rect()
+        cr.set_source_rgba(1, 1, 1, 0.97)
         cr.fill_preserve()
         cr.set_source_rgba(0.10, 0.13, 0.18, 0.92)
         cr.set_line_width(1.6)
@@ -580,6 +749,42 @@ class Companion:
         ty = by + (bh - ext.height) / 2.0 - ext.y_bearing
         cr.move_to(tx, ty)
         cr.show_text(text)
+
+    # ── input shape (click-through) ─────────────────────────────────────── #
+
+    def _update_input_shape(self, key: str, pixbuf: GdkPixbuf.Pixbuf,
+                             dx: float, dy: float) -> None:
+        """Restrict the clickable/draggable area of the window to Tux's
+        actual, non-transparent pixels.
+
+        Without this, the whole WIN_W x WIN_H rectangle is clickable —
+        including the empty transparent margin around the sprite — which
+        is exactly what makes Tux feel like "a window" instead of a
+        character sitting on the desktop: clicking right next to him
+        would swallow the click instead of passing it through to whatever
+        is underneath.
+        """
+        gdkwin = self.win.get_window()
+        if gdkwin is None:
+            return
+
+        # Cheap change-detection: only recombine the region when the
+        # sprite or its position actually changed (position changes
+        # continuously during jump/walk/dance because of bob_y, so we
+        # round to whole pixels rather than recomputing on every ~40ms
+        # tick for a sub-pixel wobble that wouldn't be visible anyway).
+        sig = (key, round(dx), round(dy))
+        if sig == self._last_shape_sig:
+            return
+        self._last_shape_sig = sig
+
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.WIN_W, self.WIN_H)
+        shape_cr = cairo.Context(surface)
+        Gdk.cairo_set_source_pixbuf(shape_cr, pixbuf, dx, dy)
+        shape_cr.paint()
+
+        region = Gdk.cairo_region_create_from_surface(surface)
+        gdkwin.input_shape_combine_region(region, 0, 0)
 
     # ── life loop ───────────────────────────────────────────────────────── #
 
@@ -632,6 +837,13 @@ class Companion:
         # real monitor (handles unplug / resolution change while running).
         self._ensure_on_screen()
 
+        # Periodic safety-net save (in addition to the save-on-drag-end and
+        # save-on-settings-applied calls) so a hard kill/crash doesn't lose
+        # more than ~a minute of position/state.
+        if now - self._last_autosave > 60.0:
+            self._last_autosave = now
+            self._save_config()
+
         # expire bubble
         if now > self.bubble_until:
             self.bubble_text = ""
@@ -649,4 +861,8 @@ class Companion:
 
 
 if __name__ == "__main__":
-    Companion().run()
+    acquire_single_instance_lock()
+    try:
+        Companion().run()
+    finally:
+        release_single_instance_lock()

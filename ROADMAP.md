@@ -25,14 +25,18 @@ Tux living on the Linux desktop: real transparency, drag and drop, click/
 double-click, 5 personalities, full settings, autostart. Zero data,
 zero utility — see exit criteria in [mvp.md](mvp.md).
 
-## V1.1 — Distribution
+## V1.1 — Distribution ✅ *(mostly done)*
 
-- Executables: AppImage first, `.deb` as a complement
-- Public repository under MIT license
-- Validated compatibility matrix: Ubuntu/GNOME, Fedora/GNOME,
-  Mint/Cinnamon, KDE Plasma (X11 + XWayland)
-- True multi-monitor support
-- Demo video < 20s
+- [x] Executables: AppImage (built on Ubuntu 22.04 for glibc compatibility,
+      Python actually bundled, not symlinked) + `.deb`, both attached to
+      the [v1.1 GitHub release](https://github.com/jomvick/compa/releases/tag/v1.1)
+- [x] Public repository under MIT license
+- [x] True multi-monitor support
+- [ ] Validated compatibility matrix: Ubuntu/GNOME, Fedora/GNOME,
+      Mint/Cinnamon, KDE Plasma (X11 + XWayland) — installs verified on
+      Fedora/KDE only so far; still needs a run on a *different* machine
+      than the one the AppImage was built on (the real portability test)
+- [ ] Demo video < 20s
 
 ## V1.2 — Consolidation: stability & native feel
 
@@ -41,36 +45,46 @@ someone ran" and start feeling like something that belongs on the desktop.
 This phase adds no new animations or systems — it hardens what already
 exists.
 
-**Input shape / click-through**
-- [ ] Apply an input shape mask to the window so only Tux's actual (non-
-      transparent) pixels receive clicks — right now the whole rectangular
-      POPUP surface is clickable/draggable, including the empty transparent
-      margin around the sprite. Clicking "next to" Tux should hit whatever
-      is behind him on the desktop, not Tux's window.
-- [ ] Recompute the input shape whenever the sprite/size changes (resize in
-      settings, personality change, new pose).
+**Input shape / click-through** ✅
+- [x] Apply an input shape mask to the window so only Tux's actual (non-
+      transparent) pixels receive clicks — implemented via
+      `Gdk.cairo_region_create_from_surface` + `input_shape_combine_region`,
+      recomputed on sprite/position change (see `_update_input_shape` in
+      `companion.py`).
+- [x] Recompute the input shape whenever the sprite/size changes (resize in
+      settings, personality change, new pose) — the shape signature is
+      reset in `_load_sprites()` and re-derived each draw when the sprite
+      key or its rounded position changes.
 
 **Window/compositor robustness**
 - [ ] Graceful fallback when no RGBA visual / no compositor is available
       (currently unverified — must not crash or render as a solid box).
-- [ ] Confirm Tux never appears in the taskbar, Alt-Tab, or Overview on
-      GNOME/KDE/XFCE.
-- [ ] Confirm clicking Tux never steals keyboard focus from the active
-      window (should never interrupt typing elsewhere).
+- [x] Confirm/enforce Tux never appears in the taskbar, Alt-Tab, or
+      Overview on GNOME/KDE/XFCE — explicit `skip_taskbar_hint` /
+      `skip_pager_hint` added on top of the POPUP window type default.
+- [x] Confirm clicking Tux never steals keyboard focus from the active
+      window — `set_accept_focus(False)` added.
 - [ ] Verify behavior across workspace/virtual desktop switches — Tux should
       either follow or stay put consistently, not vanish or duplicate.
+      (Expected by design: override-redirect windows aren't managed by the
+      WM's workspace logic, so Tux should simply always be visible on
+      whichever workspace is active — needs confirming on a real GNOME/KDE
+      session.)
 - [ ] Verify behavior through screen lock / suspend-resume (no stuck state,
       no frozen animation loop, no zombie process).
 - [ ] Handle display hot-plug / resolution change without Tux ending up
       off-screen (position is currently computed once at launch only).
-- [ ] Prevent launching a second instance (detect and refuse, or focus the
-      existing one) instead of spawning duplicates.
+- [x] Prevent launching a second instance — PID lock file at
+      `~/.config/compa/compa.pid`, stale/unreadable locks are taken over
+      automatically (see `acquire_single_instance_lock` /
+      `release_single_instance_lock`).
 
-**Persistence**
-- [ ] Save settings (personality, size, speed, opacity, keep-above,
+**Persistence** ✅
+- [x] Save settings (personality, size, speed, opacity, keep-above,
       animations toggle, last position) to `~/.config/compa/config.json` and
-      restore them on next launch. Right now every setting resets to
-      defaults on restart, which reads as unfinished rather than native.
+      restore them on next launch. Saved on: settings applied, drag end,
+      clean quit, and a 60s safety-net autosave (in case of a hard
+      kill/crash).
 
 **Performance**
 - [ ] Confirm idle CPU/GPU usage stays low over a long run (the 30-minute
