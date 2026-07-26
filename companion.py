@@ -223,10 +223,27 @@ class Companion:
 
         # RGBA visual for per-pixel transparency
         screen = Gdk.Screen.get_default()
+        self._has_rgba = False
         if screen:
             visual = screen.get_rgba_visual()
             if visual and screen.is_composited():
                 self.win.set_visual(visual)
+                self._has_rgba = True
+        if not self._has_rgba:
+            # No compositor running, or no RGBA visual available: Compa's
+            # whole premise (a borderless, per-pixel-transparent Tux) needs
+            # compositing. We deliberately don't crash — GTK will just
+            # render the window's background as opaque black instead of
+            # transparent, which looks broken but is at least not a
+            # traceback. Tell the user clearly what's going on instead of
+            # silently shipping a black square.
+            print(
+                "Compa: no compositor / RGBA visual detected — "
+                "transparency will not work correctly. Compa needs a "
+                "running compositor (this is on by default on GNOME, KDE "
+                "Plasma, and most modern desktops).",
+                file=sys.stderr,
+            )
 
         self.win.set_default_size(self.WIN_W, self.WIN_H)
         self.win.set_size_request(self.WIN_W, self.WIN_H)
@@ -495,23 +512,40 @@ class Companion:
         dlg.set_keep_above(True)
         dlg.set_resizable(False)
         box = dlg.get_content_area()
-        box.set_spacing(10)
-        box.set_property("margin", 16)
+        box.set_spacing(4)
+        box.set_property("margin", 18)
+
+        def _section(title: str, first: bool = False) -> None:
+            if not first:
+                sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                sep.set_margin_top(10)
+                sep.set_margin_bottom(10)
+                box.pack_start(sep, False, False, 0)
+            label = Gtk.Label(xalign=0)
+            label.set_markup(f"<b>{title}</b>")
+            label.set_margin_bottom(4)
+            box.pack_start(label, False, False, 0)
 
         def _slider(label: str, lo: int, hi: int, val: int) -> Gtk.Adjustment:
-            box.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            name = Gtk.Label(label=label, xalign=0)
+            name.set_size_request(70, -1)
             adj = Gtk.Adjustment(value=val, lower=lo, upper=hi, step_increment=5)
-            box.pack_start(
-                Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj),
-                False, False, 0
-            )
+            scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
+            scale.set_hexpand(True)
+            scale.set_draw_value(True)
+            scale.set_value_pos(Gtk.PositionType.RIGHT)
+            row.pack_start(name, False, False, 0)
+            row.pack_start(scale, True, True, 0)
+            box.pack_start(row, False, False, 2)
             return adj
 
-        a_size  = _slider("Size (%)",  60, 150, int(self.size  * 100))
-        a_speed = _slider("Speed (%)", 50, 160, int(self.speed * 100))
-        a_op    = _slider("Opacity (%)", 40, 100, int(self.opacity * 100))
+        _section("Appearance", first=True)
+        a_size  = _slider("Size",    60, 150, int(self.size  * 100))
+        a_speed = _slider("Speed",   50, 160, int(self.speed * 100))
+        a_op    = _slider("Opacity", 40, 100, int(self.opacity * 100))
 
-        # Personality
+        _section("Behavior")
         box.pack_start(Gtk.Label(label="Personality", xalign=0), False, False, 0)
         combo_p = Gtk.ComboBoxText()
         active_idx = 0
@@ -521,22 +555,24 @@ class Companion:
             if p_name == self.personality.label:
                 active_idx = idx
         combo_p.set_active(active_idx)
-        box.pack_start(combo_p, False, False, 0)
-
-        # Switches / CheckButtons
-        chk_topmost = Gtk.CheckButton(label="Always on top")
-        chk_topmost.set_active(self.keep_above)
-        box.pack_start(chk_topmost, False, False, 0)
+        box.pack_start(combo_p, False, False, 4)
 
         chk_anim = Gtk.CheckButton(label="Animations enabled")
         chk_anim.set_active(self.animations_enabled)
         box.pack_start(chk_anim, False, False, 0)
 
+        _section("Window")
+        chk_topmost = Gtk.CheckButton(label="Always on top")
+        chk_topmost.set_active(self.keep_above)
+        box.pack_start(chk_topmost, False, False, 0)
+
         chk_autostart = Gtk.CheckButton(label="Launch at session startup")
         chk_autostart.set_active(is_autostart_enabled())
         box.pack_start(chk_autostart, False, False, 0)
 
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dlg.add_button("Apply", Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.OK)
 
         # Show all controls first so GTK calculates full window dimensions
         dlg.show_all()

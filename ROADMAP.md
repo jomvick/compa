@@ -57,8 +57,9 @@ exists.
       key or its rounded position changes.
 
 **Window/compositor robustness**
-- [ ] Graceful fallback when no RGBA visual / no compositor is available
-      (currently unverified — must not crash or render as a solid box).
+- [x] Graceful fallback when no RGBA visual / no compositor is available —
+      doesn't crash; prints a clear one-line explanation to stderr instead
+      of silently rendering a broken black box.
 - [x] Confirm/enforce Tux never appears in the taskbar, Alt-Tab, or
       Overview on GNOME/KDE/XFCE — explicit `skip_taskbar_hint` /
       `skip_pager_hint` added on top of the POPUP window type default.
@@ -72,8 +73,9 @@ exists.
       session.)
 - [ ] Verify behavior through screen lock / suspend-resume (no stuck state,
       no frozen animation loop, no zombie process).
-- [ ] Handle display hot-plug / resolution change without Tux ending up
-      off-screen (position is currently computed once at launch only).
+- [x] Handle display hot-plug / resolution change without Tux ending up
+      off-screen — done in V1.1 already (`_ensure_on_screen`, checked every
+      tick).
 - [x] Prevent launching a second instance — PID lock file at
       `~/.config/compa/compa.pid`, stale/unreadable locks are taken over
       automatically (see `acquire_single_instance_lock` /
@@ -93,13 +95,21 @@ exists.
       cache and the GLib timeout loop).
 - [ ] Confirm zero flicker/tearing on draw across the tested compositors.
 
-**Visual integration**
-- [ ] Add a soft, subtle drop shadow under Tux so he reads as sitting *on*
-      the desktop rather than floating as a flat cut-out sprite.
-- [ ] Check contrast of the speech bubble against both light and dark
-      system themes/wallpapers.
-- [ ] Settings dialog: match sizing/spacing conventions closely enough that
-      it doesn't look like a bare default-GTK debug window.
+**Visual integration** ✅
+- [x] Add a soft, subtle drop shadow under Tux so he reads as sitting *on*
+      the desktop rather than floating as a flat cut-out sprite — radial-
+      gradient ellipse, shrinks/fades while airborne during jump
+      (`_draw_shadow`).
+- [x] Check contrast of the speech bubble against both light and dark
+      system themes/wallpapers — added a faint drop shadow behind the
+      bubble itself so its rounded edge stays legible even over busy or
+      similarly-toned wallpapers, on top of the existing white fill +
+      dark border/text.
+- [x] Settings dialog: match sizing/spacing conventions closely enough that
+      it doesn't look like a bare default-GTK debug window — grouped into
+      "Appearance" / "Behavior" / "Window" sections with bold headers and
+      separators, sliders now show their live value, explicit Cancel
+      button added alongside Apply.
 
 This phase closes when Tux can run for a full multi-hour session, survive a
 lock/unlock and a workspace switch, remember its settings, and never once be
